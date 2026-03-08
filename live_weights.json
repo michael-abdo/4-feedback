@@ -1,0 +1,10 @@
+{
+  "ke_lt_pe_near": 10,
+  "ke_gt_pe_far": 0,
+  "anti_aligned_far": 0,
+  "dominant_well": 3,
+  "wide_well_near": 0,
+  "f_growing_far": 0,
+  "mtf_aligned": 0,
+  "accelerating": 1
+}
