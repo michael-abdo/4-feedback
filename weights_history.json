@@ -26,5 +26,33 @@
       "cal_error": 22.4
     },
     "diff": {}
+  },
+  {
+    "version": 2,
+    "date": "2026-03-08",
+    "timestamp": "2026-03-08T14:12:50.145473",
+    "weights": {
+      "ke_lt_pe_near": 10,
+      "ke_gt_pe_far": 0,
+      "anti_aligned_far": 0,
+      "dominant_well": 3,
+      "wide_well_near": 0,
+      "f_growing_far": 0,
+      "mtf_aligned": 0,
+      "accelerating": 1
+    },
+    "metrics": {
+      "n_signals": 1867,
+      "n_today": 0,
+      "win_rate": 59.1,
+      "total_pnl": 16523.2,
+      "avg_pnl": 8.9,
+      "drift_win_rate": 55.5,
+      "drift_n": 832,
+      "bounce_win_rate": 62.0,
+      "bounce_n": 1035,
+      "cal_error": 22.4
+    },
+    "diff": {}
   }
 ]
