@@ -1,0 +1,27 @@
+{
+  "trading_date": "2026-03-11",
+  "live_count": 0,
+  "replay_count": 2,
+  "matched": 0,
+  "live_only": 0,
+  "replay_only": 2,
+  "match_rate": 0.0,
+  "divergences": [
+    {
+      "type": "replay_only",
+      "bucket": 155,
+      "trade_type": "bounce",
+      "direction": 1,
+      "entry": 25019.5,
+      "conviction": 87.30470941883759
+    },
+    {
+      "type": "replay_only",
+      "bucket": 250,
+      "trade_type": "drift",
+      "direction": 1,
+      "entry": 24934.75,
+      "conviction": 90.90088510354035
+    }
+  ]
+}
