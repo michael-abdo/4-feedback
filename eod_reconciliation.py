@@ -35,6 +35,7 @@ from strategies.bounce_drift.realtime_signals import (
     build_config,
     load_params,
     fetch_day_hash,
+    _fetch_source_hash,
     load_day_for_engine,
     log_signal_to_db,
     format_alert,
@@ -65,8 +66,34 @@ log = logging.getLogger("eod_reconciliation")
 # Step 1: Replay
 # ============================================================================
 
+def _truncate_day_data(day_data, up_to_bucket):
+    """Create a truncated view of day_data containing only buckets 0..up_to_bucket.
+
+    Simulates what the live system sees at bucket t — no future data.
+    Uses numpy slicing (views, not copies) for efficiency.
+    """
+    n = up_to_bucket + 1
+    truncated = {
+        "strike_prices": day_data["strike_prices"],
+        "option_types": day_data["option_types"],
+        "volume_grid": day_data["volume_grid"][:, :n],
+        "bid_grid": day_data["bid_grid"][:, :n],
+        "ask_grid": day_data["ask_grid"][:, :n],
+        "futures_prices": day_data["futures_prices"][:n],
+        "num_buckets": n,
+        "bucket_times": day_data["bucket_times"][:n] if day_data.get("bucket_times") is not None else None,
+    }
+    if day_data.get("vix_values") is not None:
+        truncated["vix_values"] = day_data["vix_values"][:n]
+    return truncated
+
+
 def run_replay_for_date(conn, trading_date, write_to_db=True):
-    """Replay signals for a date using the same engine as live.
+    """Replay signals for a date simulating live conditions (no forward-looking).
+
+    At each sampled bucket t, only data up to bucket t is visible to the engine.
+    This matches how the live system works: terrain is computed from data
+    available at poll time, not the full day's data.
 
     Tags signals with data_source='replay' so they don't mix with live.
     Returns list of replay signal dicts.
@@ -85,7 +112,10 @@ def run_replay_for_date(conn, trading_date, write_to_db=True):
 
     log.info("Replay params: %s", ", ".join(f"{k}={v:.4f}" for k, v in params.items()))
 
+    # Try all known hash prefixes: live-{date}, live-tradovate-{date}
     day_hash = fetch_day_hash(cur, trading_date)
+    if day_hash is None:
+        day_hash = _fetch_source_hash(cur, trading_date, "tradovate")
     if day_hash is None:
         log.warning("No materialized data for %s — skipping replay", trading_date)
         return []
@@ -95,8 +125,9 @@ def run_replay_for_date(conn, trading_date, write_to_db=True):
         log.warning("load_day_for_engine returned None for %s", trading_date)
         return []
 
-    log.info("Replaying %s (hash=%s, %d buckets)",
-             trading_date, day_hash[:16], day_data.get("num_buckets", 0))
+    total_buckets = day_data["num_buckets"]
+    log.info("Replaying %s (hash=%s, %d buckets, progressive-truncation mode)",
+             trading_date, day_hash[:16], total_buckets)
 
     ce = ConvictionEngine(params)
     dedup = SignalDedup(window_minutes=config["dedup_gap_min"])
@@ -107,26 +138,33 @@ def run_replay_for_date(conn, trading_date, write_to_db=True):
     min_conv = config["conviction_threshold"]
     allowed_types = set(config["trade_types"])
     strategy_id = config["version_tag"]
+    every_n = 5
 
-    for bucket_idx, signal in ce.replay_day(day_data, every_n=5, min_conviction=min_conv):
+    # Simulate live: at each bucket t, engine only sees data up to t.
+    # Fresh precompute each time to avoid incremental gamma cache drift.
+    for t in range(30, total_buckets - 30, every_n):
+        truncated = _truncate_day_data(day_data, t)
+        ce.precompute_day(truncated, incremental=False)
+        signal = ce.generate_signal(truncated, t, min_conviction=min_conv, live_mode=True)
+
         if signal is None:
             continue
         if signal.trade_type.value not in allowed_types:
             continue
 
         synth_time = datetime.datetime(2026, 1, 1, 9, 30, tzinfo=ET) + \
-            datetime.timedelta(minutes=bucket_idx)
+            datetime.timedelta(minutes=t)
 
         if dedup.is_duplicate(signal, now=synth_time):
             continue
-        if not conc.can_open(signal.well_price, bucket_idx):
+        if not conc.can_open(signal.well_price, t):
             continue
 
         dedup.record(signal, now=synth_time)
-        conc.record_open(signal.well_price, bucket_idx)
+        conc.record_open(signal.well_price, t)
 
         sig_dict = {
-            "bucket": bucket_idx,
+            "bucket": t,
             "trade_type": signal.trade_type.value,
             "direction": signal.direction,
             "conviction_pct": signal.conviction_pct,
@@ -142,7 +180,7 @@ def run_replay_for_date(conn, trading_date, write_to_db=True):
 
         if write_to_db:
             log_signal_to_db(
-                cur, signal, trading_date, bucket_idx,
+                cur, signal, trading_date, t,
                 strategy_id=strategy_id, data_source="replay", session="RTH"
             )
             conn.commit()
