@@ -280,8 +280,13 @@ def compare_signals(live_signals, replay_signals, trading_date):
         return {"live_count": 0, "replay_count": 0, "matched": 0,
                 "live_only": 0, "replay_only": 0, "divergences": []}
 
-    # Match signals: same bucket (±2), same direction, same trade_type
-    BUCKET_TOLERANCE = 2
+    # Match signals: same direction, same trade_type, within bucket tolerance.
+    # Tolerance is ±15 buckets (15 min) because:
+    #   - Live polls every ~60s but only evaluates the LATEST bucket
+    #   - Replay samples every 5 buckets (every_n=5)
+    #   - Combined: up to ~11 bucket offset is normal (5 from sampling + 6 from poll jitter)
+    #   - 15 gives margin for dedup window effects
+    BUCKET_TOLERANCE = 15
     matched = []
     live_unmatched = list(range(len(live_signals)))
     replay_unmatched = list(range(len(replay_signals)))
