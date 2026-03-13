@@ -338,7 +338,10 @@ def check_pnl(cur, trading_date, signals):
                 "qty": f[3],
             })
 
-        # For now, report theoretical vs what we can match
+        # Compute actual P&L per trade from entry/exit prices and fills
+        actual_pnl_sum = 0.0
+        actual_pnl_count = 0
+
         for row in resolved:
             tid, oid, direction, entry, exit_p, pnl, reason = row
             entry = float(entry)
@@ -347,9 +350,38 @@ def check_pnl(cur, trading_date, signals):
 
             order_fills = fills_by_order.get(oid, [])
             actual_entry = None
+            actual_exit = None
+            trade_actual_pnl = None
+
             if order_fills:
                 # First fill is entry
                 actual_entry = order_fills[0]["price"]
+
+            # Compute actual P&L for this trade:
+            # Prefer fill-based if we have both entry and exit fills,
+            # otherwise fall back to trade_log entry/exit prices.
+            if actual_entry is not None and len(order_fills) >= 2:
+                # Exit fill(s) are subsequent fills on the opposite side
+                exit_fills = order_fills[1:]
+                if exit_fills:
+                    # Weighted average exit price
+                    total_qty = sum(f["qty"] for f in exit_fills)
+                    if total_qty > 0:
+                        actual_exit = sum(f["price"] * f["qty"] for f in exit_fills) / total_qty
+                        trade_actual_pnl = direction * (actual_exit - actual_entry)
+
+            # Fallback: use trade_log entry/exit prices directly
+            if trade_actual_pnl is None and exit_p is not None:
+                trade_actual_pnl = direction * (exit_p - entry)
+
+            if trade_actual_pnl is not None:
+                actual_pnl_sum += trade_actual_pnl
+                actual_pnl_count += 1
+
+            # Flag discrepancy between computed and stored pnl_pts
+            pnl_discrepancy = None
+            if trade_actual_pnl is not None:
+                pnl_discrepancy = round(trade_actual_pnl - pnl, 2)
 
             details.append({
                 "trade_log_id": tid,
@@ -357,14 +389,51 @@ def check_pnl(cur, trading_date, signals):
                 "direction": direction,
                 "theoretical_entry": entry,
                 "actual_entry": actual_entry,
+                "actual_exit": actual_exit,
                 "theoretical_pnl": pnl,
+                "actual_pnl": round(trade_actual_pnl, 2) if trade_actual_pnl is not None else None,
+                "pnl_discrepancy": pnl_discrepancy,
                 "exit_reason": reason,
             })
+
+        if actual_pnl_count > 0:
+            actual_pnl = round(actual_pnl_sum, 2)
+
+    # Also handle the case where there are no order_ids but we have
+    # resolved trades with entry/exit prices (e.g. replay-excluded)
+    if actual_pnl is None and not order_ids:
+        fallback_sum = 0.0
+        fallback_count = 0
+        for row in resolved:
+            tid, oid, direction, entry, exit_p, pnl, reason = row
+            entry = float(entry)
+            exit_p = float(exit_p) if exit_p is not None else None
+            pnl = float(pnl)
+            if exit_p is not None:
+                computed = direction * (exit_p - entry)
+                fallback_sum += computed
+                fallback_count += 1
+                details.append({
+                    "trade_log_id": tid,
+                    "order_id": oid,
+                    "direction": direction,
+                    "theoretical_entry": entry,
+                    "actual_entry": None,
+                    "actual_exit": None,
+                    "theoretical_pnl": pnl,
+                    "actual_pnl": round(computed, 2),
+                    "pnl_discrepancy": round(computed - pnl, 2),
+                    "exit_reason": reason,
+                })
+        if fallback_count > 0:
+            actual_pnl = round(fallback_sum, 2)
+
+    delta = round(actual_pnl - theoretical, 2) if actual_pnl is not None else None
 
     return {
         "theoretical_pnl": theoretical,
         "actual_pnl": actual_pnl,
-        "delta": None,
+        "delta": delta,
         "resolved_count": len(resolved),
         "details": details,
     }
@@ -508,14 +577,26 @@ def format_report(trading_date, coverage, fills, slippage, brackets, pnl, orphan
     if pnl["resolved_count"] > 0:
         lines.append(f"  Theoretical (outcome_tracker): {pnl['theoretical_pnl']:+.1f} pts  "
                      f"({pnl['resolved_count']} resolved trades)")
+        if pnl["actual_pnl"] is not None:
+            lines.append(f"  Actual (computed):             {pnl['actual_pnl']:+.1f} pts")
+            lines.append(f"  Delta (actual - theoretical):  {pnl['delta']:+.1f} pts"
+                         f"{'  !!!' if abs(pnl['delta']) > PNL_ALERT_PTS else ''}")
+        else:
+            lines.append("  Actual: N/A (no entry/exit data)")
         if pnl["details"]:
             lines.append("")
             for d in pnl["details"]:
-                actual_str = f"{d['actual_entry']:.2f}" if d["actual_entry"] else "N/A"
+                actual_entry_str = f"{d['actual_entry']:.2f}" if d.get("actual_entry") else "N/A"
+                actual_pnl_str = f"{d['actual_pnl']:+.1f}" if d.get("actual_pnl") is not None else "N/A"
+                disc_str = ""
+                if d.get("pnl_discrepancy") is not None and abs(d["pnl_discrepancy"]) > PRICE_TOLERANCE:
+                    disc_str = f"  disc={d['pnl_discrepancy']:+.2f}"
                 lines.append(f"    #{d['trade_log_id']}  "
                              f"intent={d['theoretical_entry']:.2f}  "
-                             f"actual={actual_str}  "
-                             f"pnl={d['theoretical_pnl']:+.1f}  "
+                             f"actual={actual_entry_str}  "
+                             f"theo_pnl={d['theoretical_pnl']:+.1f}  "
+                             f"act_pnl={actual_pnl_str}"
+                             f"{disc_str}  "
                              f"{d['exit_reason']}")
     else:
         lines.append("  No resolved trades yet")
@@ -545,6 +626,8 @@ def format_report(trading_date, coverage, fills, slippage, brackets, pnl, orphan
         issues.append(f"{len(slippage['high_slippage'])} high-slippage fills (>{SLIPPAGE_ALERT_PTS} pts)")
     if orphans["count"] > 0:
         issues.append(f"{orphans['count']} orphan fills")
+    if pnl.get("delta") is not None and abs(pnl["delta"]) > PNL_ALERT_PTS:
+        issues.append(f"P&L delta {pnl['delta']:+.1f} pts (>{PNL_ALERT_PTS} threshold)")
 
     lines.append(f"  ISSUES: {len(issues)}")
     if issues:
