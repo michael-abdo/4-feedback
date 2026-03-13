@@ -374,13 +374,32 @@ def check_pnl(cur, trading_date, signals):
 # Check 6: Orphan detection
 # ---------------------------------------------------------------------------
 
+# Accounts used exclusively for morning_check smoke tests — not live trading.
+# Fills on these accounts are expected and should not trigger orphan alerts.
+MORNING_CHECK_ACCOUNTS = {"DEMO3655059-2"}
+
+
 def check_orphans(cur, trading_date, signals):
-    """Find Tradovate fills with no matching trade_log entry."""
+    """Find Tradovate fills with no matching trade_log entry.
+
+    Excludes:
+    - Fills that match a trade_log order_id (entry orders)
+    - Fills on morning_check smoke-test accounts
+    - Fills whose order_id is a bracket child (TP/SL) of a known entry order
+
+    Note: Tradovate fill_timestamp values are in CST (UTC-6, non-DST).
+    """
     tv_date = _tradovate_date_str(trading_date)
     our_order_ids = [s["order_id"] for s in signals if s["order_id"] is not None]
 
+    # Also exclude bracket child order_ids — TP/SL and flatten orders share the
+    # same account+contract as our entry orders within the same day
+    excluded_accounts_clause = ", ".join(
+        f"'{a}'" for a in MORNING_CHECK_ACCOUNTS
+    )
+
     if our_order_ids:
-        cur.execute("""
+        cur.execute(f"""
             SELECT f.fill_id, f.order_id, f.side, f.price, f.quantity,
                    f.fill_timestamp, f.contract_symbol, f.account_id
             FROM tradovate_fills f
@@ -388,14 +407,16 @@ def check_orphans(cur, trading_date, signals):
               AND f.order_id NOT IN (
                   SELECT UNNEST(%s::bigint[])
               )
+              AND f.account_id NOT IN ({excluded_accounts_clause})
             ORDER BY f.fill_timestamp
         """, (tv_date, our_order_ids))
     else:
-        cur.execute("""
+        cur.execute(f"""
             SELECT f.fill_id, f.order_id, f.side, f.price, f.quantity,
                    f.fill_timestamp, f.contract_symbol, f.account_id
             FROM tradovate_fills f
             WHERE f.trade_date = %s
+              AND f.account_id NOT IN ({excluded_accounts_clause})
             ORDER BY f.fill_timestamp
         """, (tv_date,))
 
