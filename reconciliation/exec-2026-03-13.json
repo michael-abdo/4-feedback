@@ -1,0 +1,154 @@
+{
+  "trading_date": "2026-03-13",
+  "timestamp": "2026-03-13T16:47:16.770082-04:00",
+  "coverage": {
+    "total": 11,
+    "submitted": 5,
+    "missed": 6,
+    "submission_rate": 0.45454545454545453,
+    "missed_details": [
+      {
+        "id": 39774,
+        "bucket": 172,
+        "trade_type": "bounce",
+        "direction": -1,
+        "entry_price": 24914.75,
+        "order_id": null,
+        "execution_status": "blocked_by_guard"
+      },
+      {
+        "id": 39775,
+        "bucket": 207,
+        "trade_type": "drift",
+        "direction": 1,
+        "entry_price": 24854.75,
+        "order_id": null,
+        "execution_status": "blocked_by_guard"
+      },
+      {
+        "id": 39776,
+        "bucket": 212,
+        "trade_type": "bounce",
+        "direction": 1,
+        "entry_price": 24899.25,
+        "order_id": null,
+        "execution_status": "pending"
+      },
+      {
+        "id": 39777,
+        "bucket": 214,
+        "trade_type": "drift",
+        "direction": 1,
+        "entry_price": 24881.25,
+        "order_id": null,
+        "execution_status": "pending"
+      },
+      {
+        "id": 39781,
+        "bucket": 292,
+        "trade_type": "bounce",
+        "direction": 1,
+        "entry_price": 24624.25,
+        "order_id": null,
+        "execution_status": "blocked_by_guard"
+      },
+      {
+        "id": 39784,
+        "bucket": 540,
+        "trade_type": "bounce",
+        "direction": -1,
+        "entry_price": 24370.25,
+        "order_id": null,
+        "execution_status": "blocked_by_guard"
+      }
+    ]
+  },
+  "fills": {
+    "filled": 3,
+    "cancelled": 0,
+    "rejected": 2,
+    "working": 0,
+    "other": 0,
+    "fill_rate": 0.6,
+    "unmatched_order_ids": []
+  },
+  "slippage": {
+    "count": 3,
+    "mean": -215.91666666666666,
+    "median": -213.25,
+    "max": -205.5,
+    "adverse_count": 0,
+    "high_slippage": [
+      {
+        "trade_log_id": 39778,
+        "bucket": 236,
+        "direction": 1,
+        "trade_type": "bounce",
+        "intended": 24782.0,
+        "actual": 24568.75,
+        "slippage": -213.25,
+        "adverse": false
+      },
+      {
+        "trade_log_id": 39779,
+        "bucket": 246,
+        "direction": 1,
+        "trade_type": "bounce",
+        "intended": 24710.75,
+        "actual": 24505.25,
+        "slippage": -205.5,
+        "adverse": false
+      },
+      {
+        "trade_log_id": 39780,
+        "bucket": 289,
+        "direction": 1,
+        "trade_type": "drift",
+        "intended": 24633.25,
+        "actual": 24404.25,
+        "slippage": -229.0,
+        "adverse": false
+      }
+    ]
+  },
+  "brackets": {
+    "checked": 3,
+    "matched": 3,
+    "details": [
+      {
+        "order_id": 355453043537,
+        "bucket": 289,
+        "target_match": 24961.5,
+        "stop_match": 24603.25
+      },
+      {
+        "order_id": 355453043497,
+        "bucket": 236,
+        "target_match": 24797.0,
+        "stop_match": 24771.75
+      },
+      {
+        "order_id": 355453043517,
+        "bucket": 246,
+        "target_match": 24725.75,
+        "stop_match": 24697.0
+      }
+    ]
+  },
+  "pnl": {
+    "theoretical_pnl": 27.700400801601063,
+    "actual_pnl": null,
+    "delta": null,
+    "resolved_count": 11
+  },
+  "orphans": {
+    "count": 18
+  },
+  "issues": [
+    "6 missed signals",
+    "2 rejected orders",
+    "3 high-slippage fills (>2.0 pts)",
+    "18 orphan fills"
+  ],
+  "verdict": "ISSUES"
+}
