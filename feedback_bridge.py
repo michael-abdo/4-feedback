@@ -75,6 +75,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 log = logging.getLogger("bridge")
 
 
+def send_alert(subject: str, body: str):
+    """Send alert via execution_reconciliation's send_alert, falling back to log."""
+    try:
+        from execution_reconciliation import send_alert as _send
+        _send(subject, body)
+    except Exception:
+        log.warning("ALERT (email unavailable): %s — %s", subject, body)
+
+
 # ============================================================================
 # Version tracking
 # ============================================================================
@@ -614,6 +623,26 @@ def recalibrate(n_today: int = 0) -> dict:
         "bounce_n": len(bounce),
         "cal_error": round(np.mean(cal_errors), 1) if cal_errors else 0,
     }
+
+    # --- Circuit-breaker: reject divergent recalibration ---
+    diverged = {}
+    for mod in set(list(new_weights.keys()) + list(prev_weights.keys())):
+        delta = abs(new_weights.get(mod, 0) - prev_weights.get(mod, 0))
+        if delta > 10:
+            diverged[mod] = delta
+
+    if diverged:
+        for mod, delta in diverged.items():
+            log.warning("Recalibration diverged: %s shifted %s", mod, delta)
+        log.warning("Reverting to previous weights — %d modifier(s) exceeded 10-point threshold", len(diverged))
+        try:
+            send_alert(
+                "[BRIDGE] Recalibration diverged",
+                f"Modifiers exceeded 10-point threshold: {diverged}. Reverted to previous weights.",
+            )
+        except Exception as e:
+            log.warning("Could not send divergence alert: %s", e)
+        return prev_weights
 
     # Save versioned snapshot
     record = save_version(new_weights, metrics, prev_weights)

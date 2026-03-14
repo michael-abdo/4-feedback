@@ -246,15 +246,49 @@ def check_brackets(cur, signals, fill_status_details):
         if not sig:
             continue
 
-        # Find child orders placed around the same time
-        cur.execute("""
-            SELECT order_id, side, order_type, status, limit_price, stop_price, order_text
-            FROM tradovate_orders
-            WHERE order_id != %s
-              AND order_id BETWEEN %s AND %s
-            ORDER BY order_id
-        """, (order_id, order_id - 5, order_id + 5))
-        children = cur.fetchall()
+        # Find child orders: prefer parent_order_id column, fall back to ID range heuristic
+        children = []
+
+        # Try parent_order_id column first
+        try:
+            cur.execute("""
+                SELECT order_id, side, order_type, status, limit_price, stop_price, order_text
+                FROM tradovate_orders
+                WHERE parent_order_id = %s
+                ORDER BY order_id
+            """, (order_id,))
+            children = cur.fetchall()
+        except Exception:
+            # Column doesn't exist — will fall back to heuristic below
+            pass
+
+        if not children:
+            # Fall back to ID range heuristic (expanded to ±20) with account_id filter
+            log.warning("Bracket lookup falling back to ±20 ID heuristic for order_id=%s "
+                        "(parent_order_id column missing or returned 0 results)", order_id)
+            # Get the account_id of the parent order to avoid cross-account false matches
+            cur.execute("""
+                SELECT account_id FROM tradovate_orders WHERE order_id = %s
+            """, (order_id,))
+            parent_row = cur.fetchone()
+            if parent_row and parent_row[0]:
+                cur.execute("""
+                    SELECT order_id, side, order_type, status, limit_price, stop_price, order_text
+                    FROM tradovate_orders
+                    WHERE order_id != %s
+                      AND order_id BETWEEN %s AND %s
+                      AND account_id = %s
+                    ORDER BY order_id
+                """, (order_id, order_id - 20, order_id + 20, parent_row[0]))
+            else:
+                cur.execute("""
+                    SELECT order_id, side, order_type, status, limit_price, stop_price, order_text
+                    FROM tradovate_orders
+                    WHERE order_id != %s
+                      AND order_id BETWEEN %s AND %s
+                    ORDER BY order_id
+                """, (order_id, order_id - 20, order_id + 20))
+            children = cur.fetchall()
 
         target_match = None
         stop_match = None
