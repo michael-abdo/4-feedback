@@ -51,6 +51,7 @@ from scripts.outcome_tracker import (
     load_promoted_config,
     DEFAULT_TIMEOUT_BUCKETS,
 )
+from execution_reconciliation import send_alert
 
 ET = ZoneInfo("America/New_York")
 
@@ -117,13 +118,13 @@ def run_replay_for_date(conn, trading_date, write_to_db=True):
     if day_hash is None:
         day_hash = _fetch_source_hash(cur, trading_date, "tradovate")
     if day_hash is None:
-        log.warning("No materialized data for %s — skipping replay", trading_date)
-        return []
+        log.critical("No materialized data for %s — skipping replay", trading_date)
+        return None
 
     day_data = load_day_for_engine(cur, trading_date, day_hash)
     if day_data is None:
-        log.warning("load_day_for_engine returned None for %s", trading_date)
-        return []
+        log.critical("load_day_for_engine returned None for %s", trading_date)
+        return None
 
     total_buckets = day_data["num_buckets"]
     log.info("Replaying %s (hash=%s, %d buckets, progressive-truncation mode)",
@@ -498,6 +499,13 @@ def main():
         # Step 1: Replay
         log.info("STEP 1: Replaying signals...")
         replay_signals = run_replay_for_date(conn, trading_date, write_to_db=not args.no_write)
+
+        if replay_signals is None:
+            send_alert(
+                "EOD REPLAY SKIPPED",
+                f"No materialized data for {trading_date}",
+                "CRITICAL",
+            )
 
         # Step 2: Resolve open trades
         if not args.skip_resolve:
