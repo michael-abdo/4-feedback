@@ -169,7 +169,7 @@ def get_active_strategies(conn):
 # Capability A: Live vs Backtest Comparison
 # ---------------------------------------------------------------------------
 def compute_live_metrics(conn, trading_date, strategy_ids):
-    """Compute today's metrics from trade_log."""
+    """Compute today's metrics from trade_log (executed trades only)."""
     cur = conn.cursor()
     cur.execute("""
         SELECT trade_type, conviction_pct, pnl_pts, exit_reason, bucket,
@@ -178,6 +178,8 @@ def compute_live_metrics(conn, trading_date, strategy_ids):
         WHERE trading_date = %s AND strategy_id = ANY(%s)
           AND data_source NOT IN ('replay')
           AND pnl_pts IS NOT NULL
+          AND (execution_status IN ('accepted', 'demo', 'filled')
+               OR execution_status IS NULL)
     """, (trading_date, strategy_ids))
     rows = cur.fetchall()
     cur.close()
@@ -211,7 +213,7 @@ def compute_live_metrics(conn, trading_date, strategy_ids):
 
 
 def compute_backtest_distribution(conn, trading_date, strategy_ids):
-    """Compute per-day distribution from all historical backtest data."""
+    """Compute per-day distribution from all historical data (backtest + executed live)."""
     cur = conn.cursor()
     cur.execute("""
         SELECT trading_date,
@@ -226,6 +228,8 @@ def compute_backtest_distribution(conn, trading_date, strategy_ids):
           AND data_source NOT IN ('replay')
           AND pnl_pts IS NOT NULL
           AND trading_date < %s
+          AND (execution_status IN ('accepted', 'demo', 'filled')
+               OR execution_status IS NULL)
         GROUP BY trading_date
         HAVING COUNT(*) > 0
     """, (strategy_ids, trading_date))
@@ -429,6 +433,8 @@ def find_similar_days(conn, trading_date, strategy_ids, top_k=TOP_K):
               AND data_source NOT IN ('replay')
               AND pnl_pts IS NOT NULL
               AND trading_date = ANY(%s)
+              AND (execution_status IN ('accepted', 'demo', 'filled')
+                   OR execution_status IS NULL)
             GROUP BY trading_date
         """, (strategy_ids, date_list))
         bt_rows = {r[0]: {"n_trades": r[1], "win_rate": round(float(r[2]), 3),
