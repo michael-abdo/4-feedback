@@ -135,9 +135,28 @@ def get_active_strategies(conn):
     cur.close()
     strategies = []
     for r in rows:
+        strategy_name = r[0]
+        version_tag = r[1]
+        # Build list of all strategy_id values that belong to this strategy.
+        # trade_log.strategy_id is inconsistently tagged — sometimes the
+        # strategy_name ('bounce_drift'), sometimes the version_tag
+        # ('v5-recalibrated'), sometimes sub-versions ('v4-baseline').
+        strategy_ids = {strategy_name, version_tag}
+        # Also find any strategy_id in trade_log that matches either name
+        cur2 = conn.cursor()
+        cur2.execute("""
+            SELECT DISTINCT strategy_id FROM trade_log
+            WHERE strategy_id IN (%s, %s)
+               OR strategy_version LIKE %s
+        """, (strategy_name, version_tag, f"%{version_tag}%"))
+        for row2 in cur2.fetchall():
+            strategy_ids.add(row2[0])
+        cur2.close()
+
         strategies.append({
-            "strategy_id": r[0],
-            "version_tag": r[1],
+            "strategy_id": strategy_name,
+            "strategy_ids": list(strategy_ids),  # all matching IDs
+            "version_tag": version_tag,
             "run_id": str(r[2]) if r[2] else None,
             "conviction_threshold": float(r[3]) if r[3] else 85.0,
             "timeout_buckets": int(r[4]) if r[4] else 90,
@@ -149,17 +168,17 @@ def get_active_strategies(conn):
 # ---------------------------------------------------------------------------
 # Capability A: Live vs Backtest Comparison
 # ---------------------------------------------------------------------------
-def compute_live_metrics(conn, trading_date, strategy_id):
+def compute_live_metrics(conn, trading_date, strategy_ids):
     """Compute today's metrics from trade_log."""
     cur = conn.cursor()
     cur.execute("""
         SELECT trade_type, conviction_pct, pnl_pts, exit_reason, bucket,
                COALESCE(timeout_buckets, 90) as timeout_used
         FROM trade_log
-        WHERE trading_date = %s AND strategy_id = %s
+        WHERE trading_date = %s AND strategy_id = ANY(%s)
           AND data_source NOT IN ('replay')
           AND pnl_pts IS NOT NULL
-    """, (trading_date, strategy_id))
+    """, (trading_date, strategy_ids))
     rows = cur.fetchall()
     cur.close()
 
@@ -191,7 +210,7 @@ def compute_live_metrics(conn, trading_date, strategy_id):
     }
 
 
-def compute_backtest_distribution(conn, trading_date, strategy_id):
+def compute_backtest_distribution(conn, trading_date, strategy_ids):
     """Compute per-day distribution from all historical backtest data."""
     cur = conn.cursor()
     cur.execute("""
@@ -203,13 +222,13 @@ def compute_backtest_distribution(conn, trading_date, strategy_id):
                SUM(CASE WHEN exit_reason='target' THEN 1 ELSE 0 END)::float / COUNT(*) as target_pct,
                SUM(CASE WHEN exit_reason='stop' THEN 1 ELSE 0 END)::float / COUNT(*) as stop_pct
         FROM trade_log
-        WHERE strategy_id = %s
+        WHERE strategy_id = ANY(%s)
           AND data_source NOT IN ('replay')
           AND pnl_pts IS NOT NULL
           AND trading_date < %s
         GROUP BY trading_date
         HAVING COUNT(*) > 0
-    """, (strategy_id, trading_date))
+    """, (strategy_ids, trading_date))
     rows = cur.fetchall()
     cur.close()
 
@@ -358,7 +377,7 @@ def compute_all_historical_features(conn, before_date):
     return results
 
 
-def find_similar_days(conn, trading_date, strategy_id, top_k=TOP_K):
+def find_similar_days(conn, trading_date, strategy_ids, top_k=TOP_K):
     """Find top-K historically similar days by independent market features."""
     today_features = compute_day_features(conn, trading_date)
     if today_features is None:
@@ -406,12 +425,12 @@ def find_similar_days(conn, trading_date, strategy_id, top_k=TOP_K):
                    AVG(pnl_pts) as avg_pnl,
                    SUM(pnl_pts) as total_pnl
             FROM trade_log
-            WHERE strategy_id = %s
+            WHERE strategy_id = ANY(%s)
               AND data_source NOT IN ('replay')
               AND pnl_pts IS NOT NULL
               AND trading_date = ANY(%s)
             GROUP BY trading_date
-        """, (strategy_id, date_list))
+        """, (strategy_ids, date_list))
         bt_rows = {r[0]: {"n_trades": r[1], "win_rate": round(float(r[2]), 3),
                           "avg_pnl": round(float(r[3]), 1), "total_pnl": round(float(r[4]), 1)}
                    for r in cur.fetchall()}
@@ -461,15 +480,16 @@ def run_harness(trading_date, strategy_filter=None, send_emails=True):
 
     for strat in strategies:
         sid = strat["strategy_id"]
-        log.info("Processing %s for %s...", sid, trading_date)
+        sids = strat["strategy_ids"]
+        log.info("Processing %s for %s (matching IDs: %s)...", sid, trading_date, sids)
 
         # Capability A
-        live = compute_live_metrics(conn, trading_date, sid)
-        bt_dist = compute_backtest_distribution(conn, trading_date, sid)
+        live = compute_live_metrics(conn, trading_date, sids)
+        bt_dist = compute_backtest_distribution(conn, trading_date, sids)
         comparison = compare_live_to_backtest(live, bt_dist)
 
         # Capability B
-        day_features, similar_result = find_similar_days(conn, trading_date, sid)
+        day_features, similar_result = find_similar_days(conn, trading_date, sids)
 
         # Build verdict
         a_status = comparison.get("overall_status", "grey")
